@@ -85,6 +85,30 @@ var parseSelectorsGroup = (function () {
     };
   }
 
+  function parseNegation(s) {
+    var src = s;
+    var x = /^\:(?:n|\\0{0,4}(4e|6e)(\r\n|[ \t\r\n\f])?|\\n)(?:o|\\0{0,4}(4f|6f)(\r\n|[ \t\r\n\f])?|\\o)(?:t|\\0{0,4}(54|74)(\r\n|[ \t\r\n\f])?|\\t)\([ \t\r\n\f]*/i;
+    var tmp = x.exec(s);
+    if (!tmp) {
+      return null;
+    }
+    s = s.slice(tmp[0].length);
+    var t = parseSimpleSelectorSequence(s, null);
+    if (!t) {
+      return null;
+    }
+    s = s.slice(t.raw.length);
+    tmp = (/^[ \t\r\n\f]*\)/).exec(s);
+    if (!tmp) {
+      return null;
+    }
+    s = s.slice(tmp[0].length);
+    return {
+      raw: s.length ? src.slice(0, -s.length) : src,
+      data: t.data
+    };
+  }
+
   function parseSimpleSelectorSequence(s, combinator) {
     var src = s;
     var tmp = s === '*' ? '*' : parseTypeSelector(s);
@@ -92,7 +116,8 @@ var parseSelectorsGroup = (function () {
       combinator: combinator,
       typeSelector: tmp || '*',
       classSelectors: [],
-      attributeSelectors: []
+      attributeSelectors: [],
+      negations: []
     };
     var wasSomething = !!tmp;
     if (tmp) {
@@ -103,7 +128,13 @@ var parseSelectorsGroup = (function () {
       if (!tmp) {
         tmp = parseAttributeSelector(s);
         if (!tmp) {
-          break;
+          tmp = parseNegation(s);
+          if (!tmp) {
+            break;
+          } else {
+            result.negations.push(tmp.data);
+            s = s.slice(tmp.raw.length);
+          }
         } else {
           result.attributeSelectors.push(tmp.data);
           s = s.slice(tmp.raw.length);
