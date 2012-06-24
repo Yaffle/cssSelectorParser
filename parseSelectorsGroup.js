@@ -1,9 +1,14 @@
+/*jslint regexp: true, vars: true, indent: 2 */
 
 var parseSelectorsGroup = (function () {
+  "use strict";
 
   var ident = /^\-?(?:[_a-z]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])(?:[_a-z0-9\-]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*/i;
   var string1 = (/\"([^\n\r\f\\"]|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\"/).source;
   var cssString = new RegExp('^(?:' + string1 + '|' + string1.replace(/"/g, "'") + ')', 'i');
+
+  var descendantCombinators = /^(?:[ \t\r\n\f]*(>)[ \t\r\n\f]*|[ \t\r\n\f]+(?![\+~]))/;
+  var siblingsCombinators = /^[ \t\r\n\f]*([\+~])[ \t\r\n\f]*/;
 
   function unescapeIdent(s) {
     return s.replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \n\r\t\f])?|\\([^\n\r\f0-9a-f])/gi, function (a, b, c) {
@@ -26,7 +31,7 @@ var parseSelectorsGroup = (function () {
       var tmp = ident.exec(s);
       return !tmp ? null : {
         raw: '.' + tmp[0],
-        className: unescapeIdent(tmp[0])
+        data: unescapeIdent(tmp[0])
       };
     }
     return null;
@@ -39,12 +44,11 @@ var parseSelectorsGroup = (function () {
       return null;
     }
     s = s.slice(tmp.length);
-    var tmp = ident.exec(s);
+    tmp = ident.exec(s);
     if (!tmp) {
       return null;
     }
     var result = {
-      raw: '',
       name: '',
       operator: '',
       value: ''
@@ -75,15 +79,17 @@ var parseSelectorsGroup = (function () {
       return null;
     }
     s = s.slice(tmp.length);
-    result.raw = s.length ? src.slice(0, -s.length) : src;
-    return result;
+    return {
+      raw: s.length ? src.slice(0, -s.length) : src,
+      data: result
+    };
   }
 
-  function parseSimpleSelectorSequence(s) {
+  function parseSimpleSelectorSequence(s, combinator) {
     var src = s;
     var tmp = s === '*' ? '*' : parseTypeSelector(s);
     var result = {
-      raw: '',
+      combinator: combinator,
       typeSelector: tmp || '*',
       classSelectors: [],
       attributeSelectors: []
@@ -99,11 +105,11 @@ var parseSelectorsGroup = (function () {
         if (!tmp) {
           break;
         } else {
-          result.attributeSelectors.push(tmp);
+          result.attributeSelectors.push(tmp.data);
           s = s.slice(tmp.raw.length);
         }
       } else {
-        result.classSelectors.push(tmp);
+        result.classSelectors.push(tmp.data);
         s = s.slice(tmp.raw.length);
       }
       wasSomething = true;
@@ -111,52 +117,62 @@ var parseSelectorsGroup = (function () {
     if (!wasSomething) {
       return null;
     }
-    result.raw = s.length ? src.slice(0, -s.length) : src;
-    return result;
+    return {
+      raw: s.length ? src.slice(0, -s.length) : src,
+      data: result
+    };
   }
 
-  function parseSelector(s) {
+  function parseSelector(s, firstCombinator, combinatorRE, parseNext) {
     var src = s;
-    var tmp = parseSimpleSelectorSequence(s);
+    var tmp = parseNext(s, firstCombinator);
     if (!tmp) {
       return null;
     }
-    var result = {
-      raw: '',
-      simpleSelectorSequences: [],
-      combinators: []
-    };
+    var selectorSequences = [];
     s = s.slice(tmp.raw.length);
-    result.simpleSelectorSequences.push(tmp);
-    var combinator = /^(?:[ \t\r\n\f]*([\+>~])[ \t\r\n\f]*|[ \t\r\n\f]+)/;
+    selectorSequences.push(tmp.data);
     while (s !== '') {
-      tmp = combinator.exec(s);
+      tmp = combinatorRE.exec(s);
       if (!tmp) {
         break;
       }
       s = s.slice(tmp[0].length);
-      result.combinators.push(tmp[1] || ' ');
-      tmp = parseSimpleSelectorSequence(s);
+      tmp = parseNext(s, tmp[1] || ' ');
       if (!tmp) {
         return null;
       }
-      result.simpleSelectorSequences.push(tmp);
+      selectorSequences.push(tmp.data);
       s = s.slice(tmp.raw.length);
     }
-    result.raw = s.length ? src.slice(0, -s.length) : src;
-    return result;
+    return {
+      raw: s.length ? src.slice(0, -s.length) : src,
+      data: selectorSequences
+    };
+  }
+
+  function parseSiblingsSelector(s, combinator) {
+    var tmp = parseSelector(s, combinator, siblingsCombinators, parseSimpleSelectorSequence);
+    if (!tmp) {
+      return null;
+    }
+    return {
+      raw: tmp.raw,
+      data: {
+        combinator: combinator,
+        simpleSelectorSequences: tmp.data
+      }
+    };
   }
 
   return function parseSelectorsGroup(s) {
     s = String(s).replace(/^\s+|\s+$/, '');
-    var tmp = parseSelector(s);
+    var tmp = parseSelector(s, ' ', descendantCombinators, parseSiblingsSelector);
     if (!tmp) {
       return null;
     }
-    var result = {
-      selectors: []
-    };
-    result.selectors.push(tmp);
+    var result = [];
+    result.push(tmp.data);
     s = s.slice(tmp.raw.length);
     var comma = /^[ \t\r\n\f]*,[ \t\r\n\f]*/;
     while (s !== '') {
@@ -165,11 +181,11 @@ var parseSelectorsGroup = (function () {
         return null;
       }
       s = s.slice(tmp[0].length);
-      tmp = parseSelector(s);
+      tmp = parseSelector(s, ' ', descendantCombinators, parseSiblingsSelector);
       if (!tmp) {
         return null;
       }
-      result.selectors.push(tmp);
+      result.push(tmp.data);
       s = s.slice(tmp.raw.length);
     }
     return result;
