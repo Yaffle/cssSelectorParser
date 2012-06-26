@@ -4,11 +4,8 @@ var parseSelectorsGroup = (function () {
   "use strict";
 
   var ident = /^\-?(?:[_a-z]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])(?:[_a-z0-9\-]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*/i;
-  var string1 = (/\"([^\n\r\f\\"]|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\"/).source;
-  var cssString = new RegExp('^(?:' + string1 + '|' + string1.replace(/"/g, "'") + ')', 'i');
-
-  var descendantCombinators = /^(?:[ \t\r\n\f]*(>)[ \t\r\n\f]*|[ \t\r\n\f]+(?![\+~]))/;
-  var siblingsCombinators = /^[ \t\r\n\f]*([\+~])[ \t\r\n\f]*/;
+  var cssString = /^(?:\"([^\n\r\f\\"]|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\"|\'([^\n\r\f\\']|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\')/i;
+  var whitespace = /^[ \t\r\n\f]+/;
 
   function unescapeIdent(s) {
     return s.replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \n\r\t\f])?|\\([^\n\r\f0-9a-f])/gi, function (a, b, c) {
@@ -25,12 +22,17 @@ var parseSelectorsGroup = (function () {
     return tmp ? unescapeIdent(tmp[0]) : null;
   }
 
+  function ltrim(s) {
+    var tmp = whitespace.exec(s);
+    return tmp ? s.slice(tmp[0].length) : s;
+  }
+
   function parseClassSelector(s) {
     if (s.slice(0, 1) === '.') {
       s = s.slice(1);
       var tmp = ident.exec(s);
       return !tmp ? null : {
-        raw: '.' + tmp[0],
+        rest: s.slice(tmp[0].length),
         data: unescapeIdent(tmp[0])
       };
     }
@@ -38,13 +40,12 @@ var parseSelectorsGroup = (function () {
   }
 
   function parseAttributeSelector(s) {
-    var src = s;
-    var tmp = (/^\[[ \t\r\n\f]*/).exec(s);
-    if (!tmp) {
+    if (s.slice(0, 1) !== '[') {
       return null;
     }
-    s = s.slice(tmp.length);
-    tmp = ident.exec(s);
+    s = s.slice(1);
+    s = ltrim(s);
+    var tmp = ident.exec(s);
     if (!tmp) {
       return null;
     }
@@ -55,12 +56,12 @@ var parseSelectorsGroup = (function () {
     };
     result.name = unescapeIdent(tmp[0]);
     s = s.slice(tmp[0].length);
-    s = s.replace(/^[ \t\r\n\f]+/, '');
+    s = ltrim(s);
     tmp = (/^[\^\$\*~|]?\=/).exec(s);
     if (tmp) {
       result.operator = tmp[0];
       s = s.slice(tmp[0].length);
-      s = s.replace(/^[ \t\r\n\f]+/, '');
+      s = ltrim(s);
       tmp = ident.exec(s);
       if (tmp) {
         result.value = unescapeIdent(tmp[0]);
@@ -74,43 +75,42 @@ var parseSelectorsGroup = (function () {
         s = s.slice(tmp[0].length);
       }
     }
-    tmp = (/^[ \t\r\n\f]*\]/).exec(s);
-    if (!tmp) {
+    s = ltrim(s);
+    if (s.slice(0, 1) !== ']') {
       return null;
     }
-    s = s.slice(tmp.length);
+    s = s.slice(1);
     return {
-      raw: s.length ? src.slice(0, -s.length) : src,
+      rest: s,
       data: result
     };
   }
 
   function parseNegation(s) {
-    var src = s;
-    var x = /^\:(?:n|\\0{0,4}(4e|6e)(\r\n|[ \t\r\n\f])?|\\n)(?:o|\\0{0,4}(4f|6f)(\r\n|[ \t\r\n\f])?|\\o)(?:t|\\0{0,4}(54|74)(\r\n|[ \t\r\n\f])?|\\t)\([ \t\r\n\f]*/i;
+    var x = /^\:(?:n|\\0{0,4}(4e|6e)(\r\n|[ \t\r\n\f])?|\\n)(?:o|\\0{0,4}(4f|6f)(\r\n|[ \t\r\n\f])?|\\o)(?:t|\\0{0,4}(54|74)(\r\n|[ \t\r\n\f])?|\\t)\(/i;
     var tmp = x.exec(s);
     if (!tmp) {
       return null;
     }
     s = s.slice(tmp[0].length);
+    s = ltrim(s);
     var t = parseSimpleSelectorSequence(s, null);
     if (!t) {
       return null;
     }
-    s = s.slice(t.raw.length);
-    tmp = (/^[ \t\r\n\f]*\)/).exec(s);
-    if (!tmp) {
+    s = t.rest;
+    s = ltrim(s);
+    if (s.slice(0, 1) !== ')') {
       return null;
     }
-    s = s.slice(tmp[0].length);
+    s = s.slice(1);
     return {
-      raw: s.length ? src.slice(0, -s.length) : src,
+      rest: s,
       data: t.data
     };
   }
 
   function parseSimpleSelectorSequence(s, combinator) {
-    var src = s;
     var tmp = s === '*' ? '*' : parseTypeSelector(s);
     var result = {
       combinator: combinator,
@@ -133,15 +133,15 @@ var parseSelectorsGroup = (function () {
             break;
           } else {
             result.negations.push(tmp.data);
-            s = s.slice(tmp.raw.length);
+            s = tmp.rest;
           }
         } else {
           result.attributeSelectors.push(tmp.data);
-          s = s.slice(tmp.raw.length);
+          s = tmp.rest;
         }
       } else {
         result.classSelectors.push(tmp.data);
-        s = s.slice(tmp.raw.length);
+        s = tmp.rest;
       }
       wasSomething = true;
     }
@@ -149,46 +149,54 @@ var parseSelectorsGroup = (function () {
       return null;
     }
     return {
-      raw: s.length ? src.slice(0, -s.length) : src,
+      rest: s,
       data: result
     };
   }
 
-  function parseSelector(s, firstCombinator, combinatorRE, parseNext) {
-    var src = s;
+  function parseSelector(s, firstCombinator, combinator1, combinator2, parseNext) {
     var tmp = parseNext(s, firstCombinator);
     if (!tmp) {
       return null;
     }
     var selectorSequences = [];
-    s = s.slice(tmp.raw.length);
+    s = tmp.rest;
     selectorSequences.push(tmp.data);
     while (s !== '') {
-      tmp = combinatorRE.exec(s);
-      if (!tmp) {
+      var tmp2 = ltrim(s);
+      var wasWhitespace = tmp2 !== s;
+      tmp = tmp2.slice(0, 1);
+      if (wasWhitespace && tmp !== '+' && tmp !== '>' && tmp !== '~') {
+        tmp = ' ';
+      }
+      if (tmp !== combinator1 && tmp !== combinator2) {
         break;
       }
-      s = s.slice(tmp[0].length);
-      tmp = parseNext(s, tmp[1] || ' ');
+      s = tmp2;
+      if (tmp !== ' ') {
+        s = s.slice(1);
+        s = ltrim(s);
+      }
+      tmp = parseNext(s, tmp);
       if (!tmp) {
         return null;
       }
       selectorSequences.push(tmp.data);
-      s = s.slice(tmp.raw.length);
+      s = tmp.rest;
     }
     return {
-      raw: s.length ? src.slice(0, -s.length) : src,
+      rest: s,
       data: selectorSequences
     };
   }
 
   function parseSiblingsSelector(s, combinator) {
-    var tmp = parseSelector(s, combinator, siblingsCombinators, parseSimpleSelectorSequence);
+    var tmp = parseSelector(s, combinator, '+', '~', parseSimpleSelectorSequence);
     if (!tmp) {
       return null;
     }
     return {
-      raw: tmp.raw,
+      rest: tmp.rest,
       data: {
         combinator: combinator,
         simpleSelectorSequences: tmp.data
@@ -197,27 +205,29 @@ var parseSelectorsGroup = (function () {
   }
 
   return function parseSelectorsGroup(s) {
-    s = String(s).replace(/^\s+|\s+$/, '');
-    var tmp = parseSelector(s, ' ', descendantCombinators, parseSiblingsSelector);
+    s = String(s);
+    s = ltrim(s);
+    var tmp = parseSelector(s, ' ', '>', ' ', parseSiblingsSelector);
     if (!tmp) {
       return null;
     }
     var result = [];
     result.push(tmp.data);
-    s = s.slice(tmp.raw.length);
-    var comma = /^[ \t\r\n\f]*,[ \t\r\n\f]*/;
+    s = tmp.rest;
+    s = ltrim(s);
     while (s !== '') {
-      tmp = comma.exec(s);
-      if (!tmp) {
+      if (s.slice(0, 1) !== ',') {
         return null;
       }
-      s = s.slice(tmp[0].length);
-      tmp = parseSelector(s, ' ', descendantCombinators, parseSiblingsSelector);
+      s = s.slice(1);
+      s = ltrim(s);
+      tmp = parseSelector(s, ' ', '>', ' ', parseSiblingsSelector);
       if (!tmp) {
         return null;
       }
       result.push(tmp.data);
-      s = s.slice(tmp.raw.length);
+      s = tmp.rest;
+      s = ltrim(s);
     }
     return result;
   };
