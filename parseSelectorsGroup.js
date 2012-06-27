@@ -3,9 +3,57 @@
 var parseSelectorsGroup = (function () {
   "use strict";
 
-  var ident = /^\-?(?:[_a-z]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])(?:[_a-z0-9\-]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*/i;
-  var cssString = /^(?:\"([^\n\r\f\\"]|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\"|\'([^\n\r\f\\']|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\')/i;
-  var whitespace = /^[ \t\r\n\f]+/;
+  var WHITESPACE = /^[ \t\r\n\f]+/;
+  var PLUS = /^\+/;
+  var TILDE = /^~/;
+  var GREATER = /^>/;
+  var ATTRIBUTE_OPERATOR = /^[\^\$\*~|]?\=/;
+  var IDENT = /^\-?(?:[_a-z]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])(?:[_a-z0-9\-]|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*/i;
+  var STRING = /^(?:\"([^\n\r\f\\"]|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\"|\'([^\n\r\f\\']|\\(?:\n|\r\n|\r|\f)|[^\0-\177]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?|\\[^\n\r\f0-9a-f])*\')/i;
+  var COMMA = /^,/;
+  var NOT = /^\:(?:n|\\0{0,4}(4e|6e)(\r\n|[ \t\r\n\f])?|\\n)(?:o|\\0{0,4}(4f|6f)(\r\n|[ \t\r\n\f])?|\\o)(?:t|\\0{0,4}(54|74)(\r\n|[ \t\r\n\f])?|\\t)\(/i;
+  var C = /^[\s\S]/;
+  var END = /^$/;
+
+  var TOKENS = [WHITESPACE, PLUS, TILDE, GREATER, ATTRIBUTE_OPERATOR, IDENT, STRING, COMMA, NOT, C, END];
+
+  function TokensQueue(s) {
+    this.s = s;
+    this.shift();
+    this.shift();
+  }
+
+  TokensQueue.prototype = {
+    s: null,
+    token: null,
+    tokenValue: null,
+    nextToken: null,
+    nextTokenValue: null,
+    shift: function () {
+      this.token = this.nextToken;
+      this.tokenValue = this.nextTokenValue;
+      var s = this.s;
+      var l = TOKENS.length;
+      var i = 0;
+      while (i < l) {
+        var t = TOKENS[i];
+        var tmp = t.exec(s);
+        if (tmp) {
+          this.s = s.slice(tmp[0].length);
+          this.nextToken = t;
+          this.nextTokenValue = tmp[0];
+          return;
+        }
+        i += 1;
+      }
+      this.token = null;
+    },
+    trimLeft: function () {
+      if (this.token === WHITESPACE) {
+        this.shift();
+      }
+    }
+  };
 
   function unescapeIdent(s) {
     return s.replace(/\\([0-9a-f]{1,6})(?:\r\n|[ \n\r\t\f])?|\\([^\n\r\f0-9a-f])/gi, function (a, b, c) {
@@ -17,36 +65,34 @@ var parseSelectorsGroup = (function () {
     return unescapeIdent(s.replace(/\\(\n|\r\n|\r|\f)/g, ''));
   }
 
-  function parseTypeSelector(s) {
-    var tmp = ident.exec(s);
-    return tmp ? unescapeIdent(tmp[0]) : null;
+  function parseTypeSelector(q) {
+    if (q.token !== IDENT) {
+      return null;
+    }
+    var tmp = unescapeIdent(q.tokenValue);
+    q.shift();
+    return tmp;
   }
 
-  function ltrim(s) {
-    var tmp = whitespace.exec(s);
-    return tmp ? s.slice(tmp[0].length) : s;
-  }
-
-  function parseClassSelector(s) {
-    if (s.slice(0, 1) === '.') {
-      s = s.slice(1);
-      var tmp = ident.exec(s);
-      return !tmp ? null : {
-        rest: s.slice(tmp[0].length),
-        data: unescapeIdent(tmp[0])
-      };
+  function parseClassSelector(q) {
+    if (q.token === C && q.tokenValue === '.') {
+      q.shift();
+      if (q.token !== IDENT) {
+        return null;
+      }
+      var tmp = unescapeIdent(q.tokenValue);
+      q.shift();
+      return tmp;
     }
     return null;
   }
 
-  function parseAttributeSelector(s) {
-    if (s.slice(0, 1) !== '[') {
+  function parseAttributeSelector(q) {
+    if (!(q.token === C && q.tokenValue === '[')) {
       return null;
     }
-    s = s.slice(1);
-    s = ltrim(s);
-    var tmp = ident.exec(s);
-    if (!tmp) {
+    q.trimLeft();
+    if (q.token !== IDENT) {
       return null;
     }
     var result = {
@@ -54,64 +100,55 @@ var parseSelectorsGroup = (function () {
       operator: '',
       value: ''
     };
-    result.name = unescapeIdent(tmp[0]);
-    s = s.slice(tmp[0].length);
-    s = ltrim(s);
-    tmp = (/^[\^\$\*~|]?\=/).exec(s);
-    if (tmp) {
-      result.operator = tmp[0];
-      s = s.slice(tmp[0].length);
-      s = ltrim(s);
-      tmp = ident.exec(s);
-      if (tmp) {
-        result.value = unescapeIdent(tmp[0]);
-        s = s.slice(tmp[0].length);
+    result.name = unescapeIdent(q.tokenValue);
+    q.shift();
+    q.trimLeft();
+    if (q.token === ATTRIBUTE_OPERATOR) {
+      result.operator = q.tokenValue;
+      q.shift();
+      q.trimLeft();
+      if (q.token === IDENT) {
+        result.value = unescapeIdent(q.tokenValue);
       } else {
-        tmp = cssString.exec(s);
-        if (!tmp) {
+        if (q.token !== STRING) {
           return null;
         }
-        result.value = unescapeString(tmp[0].slice(1, -1));
-        s = s.slice(tmp[0].length);
+        result.value = unescapeString(q.tokenValue.slice(1, -1));
       }
+      q.shift();
+      q.trimLeft();
     }
-    s = ltrim(s);
-    if (s.slice(0, 1) !== ']') {
+    if (!(q.token === C && q.tokenValue === ']')) {
       return null;
     }
-    s = s.slice(1);
-    return {
-      rest: s,
-      data: result
-    };
+    q.shift();
+    return result;
   }
 
-  function parseNegation(s) {
-    var x = /^\:(?:n|\\0{0,4}(4e|6e)(\r\n|[ \t\r\n\f])?|\\n)(?:o|\\0{0,4}(4f|6f)(\r\n|[ \t\r\n\f])?|\\o)(?:t|\\0{0,4}(54|74)(\r\n|[ \t\r\n\f])?|\\t)\(/i;
-    var tmp = x.exec(s);
+  function parseNegation(q) {
+    if (q.token !== NOT) {
+      return null;
+    }
+    q.shift();
+    q.trimLeft();
+    var tmp = parseSimpleSelectorSequence(q, null);
     if (!tmp) {
       return null;
     }
-    s = s.slice(tmp[0].length);
-    s = ltrim(s);
-    var t = parseSimpleSelectorSequence(s, null);
-    if (!t) {
+    q.trimLeft();
+    if (!(q.token === C && q.tokenValue === ')')) {
       return null;
     }
-    s = t.rest;
-    s = ltrim(s);
-    if (s.slice(0, 1) !== ')') {
-      return null;
-    }
-    s = s.slice(1);
-    return {
-      rest: s,
-      data: t.data
-    };
+    q.shift();
+    return tmp;
   }
 
-  function parseSimpleSelectorSequence(s, combinator) {
-    var tmp = s === '*' ? '*' : parseTypeSelector(s);
+  function parseSimpleSelectorSequence(q, combinator) {
+    var tmp = parseTypeSelector(q);
+    if (!tmp && q.token === C && q.tokenValue === '*') {
+      tmp = '*';
+      q.shift();
+    }
     var result = {
       combinator: combinator,
       typeSelector: tmp || '*',
@@ -120,114 +157,100 @@ var parseSelectorsGroup = (function () {
       negations: []
     };
     var wasSomething = !!tmp;
-    if (tmp) {
-      s = s.slice(tmp.length);
-    }
     while (true) {
-      tmp = parseClassSelector(s);
+      tmp = parseClassSelector(q);
       if (!tmp) {
-        tmp = parseAttributeSelector(s);
+        tmp = parseAttributeSelector(q);
         if (!tmp) {
-          tmp = parseNegation(s);
+          tmp = parseNegation(q);
           if (!tmp) {
             break;
           } else {
-            result.negations.push(tmp.data);
-            s = tmp.rest;
+            result.negations.push(tmp);
           }
         } else {
-          result.attributeSelectors.push(tmp.data);
-          s = tmp.rest;
+          result.attributeSelectors.push(tmp);
         }
       } else {
-        result.classSelectors.push(tmp.data);
-        s = tmp.rest;
+        result.classSelectors.push(tmp);
       }
       wasSomething = true;
     }
     if (!wasSomething) {
       return null;
     }
-    return {
-      rest: s,
-      data: result
-    };
+    return result;
   }
 
-  function parseSelector(s, firstCombinator, combinator1, combinator2, parseNext) {
-    var tmp = parseNext(s, firstCombinator);
+  function parseSelector(q, firstCombinator, token1, token2, parseNext) {
+    var tmp = parseNext(q, firstCombinator);
     if (!tmp) {
       return null;
     }
     var selectorSequences = [];
-    s = tmp.rest;
-    selectorSequences.push(tmp.data);
-    while (s !== '') {
-      var tmp2 = ltrim(s);
-      var wasWhitespace = tmp2 !== s;
-      tmp = tmp2.slice(0, 1);
-      if (wasWhitespace && tmp !== '+' && tmp !== '>' && tmp !== '~') {
-        tmp = ' ';
-      }
-      if (tmp !== combinator1 && tmp !== combinator2) {
+    selectorSequences.push(tmp);
+    while (true) {
+      var token = q.token;
+      var nextToken = q.nextToken;
+      if (token === WHITESPACE && nextToken === END) {
+        q.shift();
         break;
       }
-      s = tmp2;
-      if (tmp !== ' ') {
-        s = s.slice(1);
-        s = ltrim(s);
+      var needsShift = token === WHITESPACE && (nextToken === PLUS || nextToken === TILDE || nextToken === GREATER);
+      if (needsShift) {
+        token = nextToken;
       }
-      tmp = parseNext(s, tmp);
+      if (token !== token1 && token !== token2) {
+        break;
+      }
+      if (needsShift) {
+        q.shift();
+      }
+      var tokenValue = token === WHITESPACE ? ' ' : q.tokenValue;
+      q.shift();
+      q.trimLeft();
+      tmp = parseNext(q, tokenValue);
       if (!tmp) {
         return null;
       }
-      selectorSequences.push(tmp.data);
-      s = tmp.rest;
+      selectorSequences.push(tmp);
     }
-    return {
-      rest: s,
-      data: selectorSequences
-    };
+    return selectorSequences;
   }
 
   function parseSiblingsSelector(s, combinator) {
-    var tmp = parseSelector(s, combinator, '+', '~', parseSimpleSelectorSequence);
+    var tmp = parseSelector(s, combinator, PLUS, TILDE, parseSimpleSelectorSequence);
     if (!tmp) {
       return null;
     }
     return {
-      rest: tmp.rest,
-      data: {
-        combinator: combinator,
-        simpleSelectorSequences: tmp.data
-      }
+      combinator: combinator,
+      simpleSelectorSequences: tmp
     };
   }
 
   return function parseSelectorsGroup(s) {
-    s = String(s);
-    s = ltrim(s);
-    var tmp = parseSelector(s, ' ', '>', ' ', parseSiblingsSelector);
+    var q = new TokensQueue(String(s));
+    q.trimLeft();
+    var tmp = parseSelector(q, ' ', GREATER, WHITESPACE, parseSiblingsSelector);
     if (!tmp) {
       return null;
     }
     var result = [];
-    result.push(tmp.data);
-    s = tmp.rest;
-    s = ltrim(s);
-    while (s !== '') {
-      if (s.slice(0, 1) !== ',') {
+    result.push(tmp);
+    q.trimLeft();
+    while (q.token !== END) {
+      if (q.token !== COMMA) {
         return null;
       }
-      s = s.slice(1);
-      s = ltrim(s);
-      tmp = parseSelector(s, ' ', '>', ' ', parseSiblingsSelector);
+      q.shift();
+      q.trimLeft();
+      tmp = parseSelector(q, ' ', GREATER, WHITESPACE, parseSiblingsSelector);
       if (!tmp) {
         return null;
       }
-      result.push(tmp.data);
-      s = tmp.rest;
-      s = ltrim(s);
+      result.push(tmp);
+      q.trimLeft();
     }
     return result;
   };
